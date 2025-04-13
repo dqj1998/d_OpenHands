@@ -1,0 +1,8 @@
+[core]
+runtime = "local"
+workspace_base="'<your worspace path>'"
+
+[llm]
+model="ollama/deepseek-r1:8b"
+api_key="ollama"
+base_url="http://localhost:11434"

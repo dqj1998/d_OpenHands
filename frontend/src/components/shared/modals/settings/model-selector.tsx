@@ -167,3 +167,10 @@ export function ModelSelector({
     </div>
   );
 }
+
+const models = {
+  ollama: {
+    separator: "/",
+    models: ["deepseek-r1:8b"],
+  },
+};

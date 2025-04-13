@@ -5,6 +5,7 @@ export const VERIFIED_MODELS = [
   "claude-3-5-sonnet-20241022",
   "claude-3-7-sonnet-20250219",
   "deepseek-chat",
+  "ollama/deepseek-r1:8b",
 ];
 
 // LiteLLM does not return OpenAI models with the provider, so we list them here to set them ourselves for consistency
