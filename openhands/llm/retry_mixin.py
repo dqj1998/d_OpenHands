@@ -1,3 +1,5 @@
+from typing import Any, Callable
+
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -13,9 +15,8 @@ from openhands.utils.tenacity_stop import stop_if_should_exit
 class RetryMixin:
     """Mixin class for retry logic."""
 
-    def retry_decorator(self, **kwargs):
-        """
-        Create a LLM retry decorator with customizable parameters. This is used for 429 errors, and a few other exceptions in LLM classes.
+    def retry_decorator(self, **kwargs: Any) -> Callable:
+        """Create a LLM retry decorator with customizable parameters. This is used for 429 errors, and a few other exceptions in LLM classes.
 
         Args:
             **kwargs: Keyword arguments to override default retry behavior.
@@ -31,7 +32,7 @@ class RetryMixin:
         retry_multiplier = kwargs.get('retry_multiplier')
         retry_listener = kwargs.get('retry_listener')
 
-        def before_sleep(retry_state):
+        def before_sleep(retry_state: Any) -> None:
             self.log_retry_attempt(retry_state)
             if retry_listener:
                 retry_listener(retry_state.attempt_number, num_retries)
@@ -52,7 +53,7 @@ class RetryMixin:
                             f'LLMNoResponseError detected with temperature={current_temp}, keeping original temperature'
                         )
 
-        return retry(
+        retry_decorator: Callable = retry(
             before_sleep=before_sleep,
             stop=stop_after_attempt(num_retries) | stop_if_should_exit(),
             reraise=True,
@@ -65,10 +66,35 @@ class RetryMixin:
                 max=retry_max_wait,
             ),
         )
+        return retry_decorator
 
-    def log_retry_attempt(self, retry_state):
+    def log_retry_attempt(self, retry_state: Any) -> None:
         """Log retry attempts."""
         exception = retry_state.outcome.exception()
+
+        # Add retry attempt and max retries to the exception for later use
+        if hasattr(retry_state, 'retry_object') and hasattr(
+            retry_state.retry_object, 'stop'
+        ):
+            # Get the max retries from the stop_after_attempt
+            stop_condition = retry_state.retry_object.stop
+
+            # Handle both single stop conditions and stop_any (combined conditions)
+            stop_funcs = []
+            if hasattr(stop_condition, 'stops'):
+                # This is a stop_any object with multiple stop conditions
+                stop_funcs = stop_condition.stops
+            else:
+                # This is a single stop condition
+                stop_funcs = [stop_condition]
+
+            for stop_func in stop_funcs:
+                if hasattr(stop_func, 'max_attempts'):
+                    # Add retry information to the exception
+                    exception.retry_attempt = retry_state.attempt_number
+                    exception.max_retries = stop_func.max_attempts
+                    break
+
         logger.error(
             f'{exception}. Attempt #{retry_state.attempt_number} | You can customize retry values in the configuration.',
         )
