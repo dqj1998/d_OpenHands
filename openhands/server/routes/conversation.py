@@ -1,7 +1,24 @@
+# IMPORTANT: LEGACY V0 CODE - Deprecated since version 1.0.0, scheduled for removal April 1, 2026
+# This file is part of the legacy (V0) implementation of OpenHands and will be removed soon as we complete the migration to V1.
+# OpenHands V1 uses the Software Agent SDK for the agentic core and runs a new application server. Please refer to:
+#   - V1 agentic core (SDK): https://github.com/OpenHands/software-agent-sdk
+#   - V1 application server (in this repo): openhands/app_server/
+# Unless you are working on deprecation, please avoid extending this legacy file and consult the V1 codepaths above.
+# Tag: Legacy-V0
+# This module belongs to the old V0 web server. The V1 application server lives under openhands/app_server/.
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from openhands.app_server.app_conversation.app_conversation_info_service import (
+    AppConversationInfoService,
+)
+from openhands.app_server.app_conversation.app_conversation_models import (
+    AppConversationInfo,
+)
+from openhands.app_server.config import depends_app_conversation_info_service
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action.message import MessageAction
 from openhands.events.event_filter import EventFilter
@@ -21,27 +38,94 @@ app = APIRouter(
     prefix='/api/conversations/{conversation_id}', dependencies=get_dependencies()
 )
 
+# Dependency for app conversation service
+app_conversation_info_service_dependency = depends_app_conversation_info_service()
 
-@app.get('/config')
-async def get_remote_runtime_config(
-    conversation: ServerConversation = Depends(get_conversation),
-) -> JSONResponse:
-    """Retrieve the runtime configuration.
 
-    Currently, this is the session ID and runtime ID (if available).
+async def _get_v1_conversation_info(
+    conversation_id: str, app_conversation_info_service: AppConversationInfoService
+) -> AppConversationInfo | None:
+    try:
+        conversation_uuid = uuid.UUID(conversation_id)
+        app_conversation_info = (
+            await app_conversation_info_service.get_app_conversation_info(
+                conversation_uuid
+            )
+        )
+        return app_conversation_info
+    except (ValueError, TypeError):
+        # Not a valid UUID, so it's not a V1 conversation
+        return None
+    except Exception as e:
+        # Service error, assume it's not a V1 conversation
+        logger.debug(f'Failed to fetch V1 conversation {conversation_id}: {e}')
+        return None
+
+
+def _get_v0_conversation_config(
+    conversation: ServerConversation,
+) -> dict[str, str | None]:
+    """Get configuration for a V0 conversation.
+
+    Args:
+        conversation: The server conversation object
+
+    Returns:
+        Dictionary with runtime_id and session_id from the runtime
     """
     runtime = conversation.runtime
     runtime_id = runtime.runtime_id if hasattr(runtime, 'runtime_id') else None
     session_id = runtime.sid if hasattr(runtime, 'sid') else None
-    return JSONResponse(
-        content={
-            'runtime_id': runtime_id,
-            'session_id': session_id,
-        }
+
+    return {
+        'runtime_id': runtime_id,
+        'session_id': session_id,
+    }
+
+
+@app.get('/config')
+async def get_remote_runtime_config(
+    conversation_id: str,
+    app_conversation_info_service: AppConversationInfoService = app_conversation_info_service_dependency,
+    user_id: str | None = Depends(get_user_id),
+) -> JSONResponse:
+    """Retrieve the runtime configuration.
+
+    For V0 conversations: returns runtime_id and session_id from the runtime.
+    For V1 conversations: returns sandbox_id as runtime_id and conversation_id as session_id.
+    """
+    # Check if this is a V1 conversation first
+    v1_conversation_info = await _get_v1_conversation_info(
+        conversation_id, app_conversation_info_service
     )
+    if v1_conversation_info:
+        # This is a V1 conversation
+        return JSONResponse(
+            content={
+                'runtime_id': v1_conversation_info.sandbox_id,
+                'session_id': conversation_id,
+            },
+            status_code=200,
+        )
+    else:
+        # V0 conversation - get the conversation and use the existing logic
+        conversation = await conversation_manager.attach_to_conversation(
+            conversation_id, user_id
+        )
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f'Conversation {conversation_id} not found',
+            )
+        try:
+            config = _get_v0_conversation_config(conversation)
+        finally:
+            await conversation_manager.detach_from_conversation(conversation)
+
+    return JSONResponse(content=config)
 
 
-@app.get('/vscode-url')
+@app.get('/vscode-url', deprecated=True)
 async def get_vscode_url(
     conversation: ServerConversation = Depends(get_conversation),
 ) -> JSONResponse:
@@ -54,6 +138,9 @@ async def get_vscode_url(
 
     Returns:
         JSONResponse: A JSON response indicating the success of the operation.
+
+        For V1 conversations, the VSCode URL is available in the sandbox's ``exposed_urls``
+        field. Use ``GET /api/v1/sandboxes?id={sandbox_id}`` to retrieve sandbox information and use the name VSCODE.
     """
     try:
         runtime: Runtime = conversation.runtime
@@ -73,7 +160,7 @@ async def get_vscode_url(
         )
 
 
-@app.get('/web-hosts')
+@app.get('/web-hosts', deprecated=True)
 async def get_hosts(
     conversation: ServerConversation = Depends(get_conversation),
 ) -> JSONResponse:
@@ -86,6 +173,9 @@ async def get_hosts(
 
     Returns:
         JSONResponse: A JSON response indicating the success of the operation.
+
+        For V1 conversations, web hosts are available in the sandbox's ``exposed_urls``
+        field. Use ``GET /api/v1/sandboxes?id={sandbox_id}`` to retrieve sandbox information and use the name AGENT_SERVER.
     """
     try:
         runtime: Runtime = conversation.runtime
@@ -103,7 +193,7 @@ async def get_hosts(
         )
 
 
-@app.get('/events')
+@app.get('/events', deprecated=True)
 async def search_events(
     conversation_id: str,
     start_id: int = 0,
@@ -133,6 +223,10 @@ async def search_events(
     Raises:
         HTTPException: If conversation is not found or access is denied
         ValueError: If limit is less than 1 or greater than 100
+
+        Use the V1 endpoint ``GET /api/v1/events/search?conversation_id__eq={conversation_id}``
+        instead, which provides enhanced filtering by event kind, timestamp ranges,
+        and improved pagination.
     """
     if limit < 0 or limit > 100:
         raise HTTPException(
@@ -169,10 +263,15 @@ async def search_events(
     }
 
 
-@app.post('/events')
+@app.post('/events', deprecated=True)
 async def add_event(
     request: Request, conversation: ServerConversation = Depends(get_conversation)
 ):
+    """Add an event to a conversation.
+
+    For V1 conversations, events are managed through the sandbox webhook system.
+    Use ``POST /api/v1/webhooks/events/{conversation_id}`` for event callbacks.
+    """
     data = await request.json()
     await conversation_manager.send_event_to_conversation(conversation.sid, data)
     return JSONResponse({'success': True})
@@ -184,7 +283,7 @@ class AddMessageRequest(BaseModel):
     message: str
 
 
-@app.post('/message')
+@app.post('/message', deprecated=True)
 async def add_message(
     data: AddMessageRequest,
     conversation: ServerConversation = Depends(get_conversation),
@@ -200,6 +299,9 @@ async def add_message(
 
     Returns:
         JSONResponse: A JSON response indicating the success of the operation
+
+        For V1 conversations, messages are handled through the agent server.
+        Use the sandbox's exposed agent server URL to send messages.
     """
     try:
         # Create a MessageAction from the provided message text
@@ -236,7 +338,7 @@ class MicroagentResponse(BaseModel):
     tools: list[str] = []
 
 
-@app.get('/microagents')
+@app.get('/microagents', deprecated=True)
 async def get_microagents(
     conversation: ServerConversation = Depends(get_conversation),
 ) -> JSONResponse:
@@ -246,6 +348,9 @@ async def get_microagents(
 
     Returns:
         JSONResponse: A JSON response containing the list of microagents.
+
+        Use the V1 endpoint ``GET /api/v1/app-conversations/{conversation_id}/skills`` instead,
+        which provides skill information including triggers and content for V1 conversations.
     """
     try:
         # Get the agent session for this conversation
@@ -279,12 +384,14 @@ async def get_microagents(
                     content=r_agent.content,
                     triggers=[],
                     inputs=r_agent.metadata.inputs,
-                    tools=[
-                        server.name
-                        for server in r_agent.metadata.mcp_tools.stdio_servers
-                    ]
-                    if r_agent.metadata.mcp_tools
-                    else [],
+                    tools=(
+                        [
+                            server.name
+                            for server in r_agent.metadata.mcp_tools.stdio_servers
+                        ]
+                        if r_agent.metadata.mcp_tools
+                        else []
+                    ),
                 )
             )
 
@@ -297,18 +404,20 @@ async def get_microagents(
                     content=k_agent.content,
                     triggers=k_agent.triggers,
                     inputs=k_agent.metadata.inputs,
-                    tools=[
-                        server.name
-                        for server in k_agent.metadata.mcp_tools.stdio_servers
-                    ]
-                    if k_agent.metadata.mcp_tools
-                    else [],
+                    tools=(
+                        [
+                            server.name
+                            for server in k_agent.metadata.mcp_tools.stdio_servers
+                        ]
+                        if k_agent.metadata.mcp_tools
+                        else []
+                    ),
                 )
             )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={'microagents': [m.dict() for m in microagents]},
+            content={'microagents': [m.model_dump() for m in microagents]},
         )
     except Exception as e:
         logger.error(f'Error getting microagents: {e}')

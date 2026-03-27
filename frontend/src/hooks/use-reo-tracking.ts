@@ -3,6 +3,7 @@ import { useConfig } from "./query/use-config";
 import { useGitUser } from "./query/use-git-user";
 import { getLoginMethod, LoginMethod } from "#/utils/local-storage";
 import reoService, { ReoIdentity } from "#/utils/reo";
+import { isProductionDomain } from "#/utils/utils";
 
 /**
  * Maps login method to Reo identity type
@@ -92,21 +93,26 @@ export const useReoTracking = () => {
   const { data: user } = useGitUser();
   const [hasIdentified, setHasIdentified] = React.useState(false);
 
-  // Initialize Reo.dev when in SaaS mode
+  // Initialize Reo.dev when in SaaS mode and on the correct domain
   React.useEffect(() => {
     const initReo = async () => {
-      if (config?.APP_MODE === "saas" && !reoService.isInitialized()) {
+      if (
+        config?.app_mode === "saas" &&
+        isProductionDomain() &&
+        !reoService.isInitialized()
+      ) {
         await reoService.init();
       }
     };
 
     initReo();
-  }, [config?.APP_MODE]);
+  }, [config?.app_mode]);
 
-  // Identify user when user data is available and we're in SaaS mode
+  // Identify user when user data is available and we're in SaaS mode on correct domain
   React.useEffect(() => {
     if (
-      config?.APP_MODE !== "saas" ||
+      config?.app_mode !== "saas" ||
+      !isProductionDomain() ||
       !user ||
       hasIdentified ||
       !reoService.isInitialized()
@@ -125,5 +131,5 @@ export const useReoTracking = () => {
     // Identify user in Reo
     reoService.identify(identity);
     setHasIdentified(true);
-  }, [config?.APP_MODE, user, hasIdentified]);
+  }, [config?.app_mode, user, hasIdentified]);
 };
